@@ -26,6 +26,14 @@ class promptableSAM2(nn.Module):
     def device(self):
         return self.pixel_mean.device
 
+    def extract_features(self, images):
+        B, T = 1, 1
+        vis_outs = self.sam.image_encoder.trunk(images)
+        orig_size = [tuple(x.shape[-2:]) for x in images]
+        backbone_out = self._forward_fpn(vis_outs)
+        vision_feats, vision_pos_embeds, feat_sizes = self.sam._prepare_backbone_features(backbone_out)
+        backbone_output = BackboneOutput(B, T, orig_size, vision_feats, vision_pos_embeds, feat_sizes)
+        return backbone_output
         
     def preprocess_visual_features(self, samples, image_size):
         B, T, C, H, W = samples.shape
@@ -35,8 +43,8 @@ class promptableSAM2(nn.Module):
         BT = (B, T)
         return samples, BT, orig_size
 
-    def compute_decoder_out_no_mem(self, backbone_out: BackboneOutput, idx: int, prompt_input):
-        current_vision_feats = backbone_out.get_current_feats(idx)
+    def compute_decoder_out_no_mem(self, backbone_out: BackboneOutput, prompt_input, multimask_output):
+        current_vision_feats = backbone_out.get_current_feats(0)
         high_res_features = backbone_out.get_high_res_features(current_vision_feats)
 
         pix_feat_no_mem = current_vision_feats[-1:][-1] + self.sam.no_mem_embed
@@ -45,9 +53,11 @@ class promptableSAM2(nn.Module):
             backbone_features=pix_feat_no_mem,
             point_inputs=prompt_input,
             high_res_features=high_res_features,
+            multimask_output=multimask_output
         )
-        return decoder_out
+        decoder_out.compute_mask(self.image_size, backbone_out.orig_size[0])
 
+        return decoder_out.masks, decoder_out.ious, decoder_out.low_res_masks
     
     def forward(self, samples, targets):
         # samples: tensor B*T, C, H, W

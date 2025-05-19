@@ -90,7 +90,7 @@ class SamPredictor:
         self.original_size = original_image_size
         self.input_size = tuple(transformed_image.shape[-2:])
         input_image = self.model.preprocess(transformed_image)
-        self.features = self.model.image_encoder(input_image)
+        self.features = self.model.extract_features(input_image)
         self.is_image_set = True
 
     def predict(
@@ -221,25 +221,31 @@ class SamPredictor:
             points = (point_coords, point_labels)
         else:
             points = None
+        # coords have to be Shape [1, P, 2]
+        # labels have to be Shape [1, P]
+        point_inputs = {
+            "point_coords": point_coords.permute(1, 0, 2), 
+            "point_labels": point_labels.permute(1, 0)  
+        }
+        masks, iou_predictions, low_res_masks = self.model.compute_decoder_out_no_mem(self.features, point_inputs, multimask_output)
+        # # Embed prompts
+        # sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
+        #     points=points,
+        #     boxes=boxes,
+        #     masks=mask_input,
+        # )
 
-        # Embed prompts
-        sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
-            points=points,
-            boxes=boxes,
-            masks=mask_input,
-        )
+        # # Predict masks
+        # low_res_masks, iou_predictions = self.model.mask_decoder(
+        #     image_embeddings=self.features,
+        #     image_pe=self.model.prompt_encoder.get_dense_pe(),
+        #     sparse_prompt_embeddings=sparse_embeddings,
+        #     dense_prompt_embeddings=dense_embeddings,
+        #     multimask_output=multimask_output,
+        # )
 
-        # Predict masks
-        low_res_masks, iou_predictions = self.model.mask_decoder(
-            image_embeddings=self.features,
-            image_pe=self.model.prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            multimask_output=multimask_output,
-        )
-
-        # Upscale the masks to the original image resolution
-        masks = self.model.postprocess_masks(low_res_masks, self.input_size, self.original_size)
+        # # Upscale the masks to the original image resolution
+        # masks = self.model.postprocess_masks(low_res_masks, self.input_size, self.original_size)
 
         if not return_logits:
             masks = masks > self.model.mask_threshold
