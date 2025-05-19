@@ -221,14 +221,30 @@ class SamPredictor:
             points = (point_coords, point_labels)
         else:
             points = None
-        # coords have to be Shape [1, P, 2]
-        # labels have to be Shape [1, P]
-        point_inputs = {
-            "point_coords": point_coords.permute(1, 0, 2), 
-            "point_labels": point_labels.permute(1, 0)  
-        }
-        masks, iou_predictions, low_res_masks = self.model.compute_decoder_out_no_mem(self.features, point_inputs, multimask_output)
+        # masks, iou_predictions, low_res_masks = self.model.compute_decoder_out_no_mem(self.features, point_inputs, multimask_output)
         # # Embed prompts
+        sparse_embeddings, dense_embeddings = self.model.sam.sam_prompt_encoder(
+            points=points,
+            boxes=None,
+            masks=None,
+        )
+        current_vision_feats = self.features.get_current_feats(0)
+        high_res_features = self.features.get_high_res_features(current_vision_feats)
+        pix_feat_no_mem = current_vision_feats[-1:][-1] + self.model.sam.no_mem_embed
+        pix_feat_no_mem = pix_feat_no_mem.permute(1, 2, 0).view(1, 256, 64, 64)
+
+        low_res_masks, iou_predictions, _, _, _, _, _ = self.model.sam.sam_mask_decoder(
+            image_embeddings=pix_feat_no_mem,
+            image_pe=self.model.sam.sam_prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            multimask_output=multimask_output,
+            repeat_image=True,
+            high_res_features=high_res_features,
+        )
+        from torch.nn import functional as F
+        masks = F.interpolate(low_res_masks, self.original_size, align_corners=False, mode='bilinear', antialias=True)
+
         # sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
         #     points=points,
         #     boxes=boxes,
