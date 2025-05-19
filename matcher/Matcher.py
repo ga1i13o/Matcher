@@ -457,9 +457,15 @@ def build_matcher_oss(args):
     dinov2.eval()
     dinov2.to(device=args.device)
 
-    # SAM
-    sam = sam_model_registry[args.sam_size](checkpoint=args.sam_weights)
-    sam.to(device=args.device)
+    if not args.use_sam2:
+        # SAM
+        sam = sam_model_registry[args.sam_size](checkpoint=args.sam_weights)
+        sam.to(device=args.device)
+    else:
+        from sam2.multimodalSAM2 import build_sam2
+        sam = build_sam2(args)
+        sam.to(device=args.device)
+
     generator = SamAutomaticMaskGenerator(
         sam,
         points_per_side=args.points_per_side,
@@ -475,6 +481,7 @@ def build_matcher_oss(args):
         dense_pred=args.use_dense_mask,
         multimask_output=args.dense_multimask_output > 0,
         sel_multimask_output=args.multimask_output > 0,
+        is_sam2=args.use_sam2
     )
 
     score_filter_cfg = {

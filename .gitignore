@@ -11,7 +11,11 @@ _ext
 build/
 dist/
 wheels/
-
+output
+datasets/COCO2014/annotations
+train2014
+val2014
+pretrain
 # pytorch/python/numpy formats
 *.pth
 #*.pkl

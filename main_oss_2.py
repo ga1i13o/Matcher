@@ -14,11 +14,17 @@ from matcher.common.evaluation import Evaluator
 from matcher.common import utils
 from matcher.data.dataset import FSSDataset
 from matcher.Matcher import build_matcher_oss
-
+from PIL import Image
 import random
 random.seed(0)
 
-from time import time
+
+def denormalize(tens):
+    mean = torch.tensor([0.485, 0.456, 0.406]).reshape(3, 1, 1).to(tens.device)
+    std = torch.tensor([0.229, 0.224, 0.225]).reshape(3, 1, 1).to(tens.device)
+    return (tens*std)+mean
+from torchvision import transforms
+from os.path import join
 def test(matcher, dataloader, args=None):
     r""" Test Matcher """
 
@@ -26,41 +32,27 @@ def test(matcher, dataloader, args=None):
     # Follow HSNet
     utils.fix_randseed(0)
     average_meter = AverageMeter(dataloader.dataset)
-    tot_el = 0
+    save_visualize_path_prefix = 'matcher_images'
+    os.makedirs(save_visualize_path_prefix, exist_ok=True)
+    
     for idx, batch in enumerate(dataloader):
 
         batch = utils.to_cuda(batch)
         query_img, query_mask, support_imgs, support_masks = \
             batch['query_img'], batch['query_mask'], \
             batch['support_imgs'], batch['support_masks']
-        s = time()
-        # 1. Matcher prepare references and target
-        matcher.set_reference(support_imgs, support_masks)
-        matcher.set_target(query_img)
 
-        # 2. Predict mask of target
-        pred_mask = matcher.predict()
-        matcher.clear()
-        tot_el += time() -s
-        assert pred_mask.size() == batch['query_mask'].size(), \
-            'pred {} ori {}'.format(pred_mask.size(), batch['query_mask'].size())
+        h, w = query_img.shape[-2:]
+        dst = Image.new('RGB', (w*2, h))
+        source_img = transforms.functional.to_pil_image(support_imgs[0,0])
 
-        # 3. Evaluate prediction
-        area_inter, area_union = Evaluator.classify_prediction(pred_mask.clone(), batch)
-        average_meter.update(area_inter, area_union, batch['class_id'], loss=None)
-        average_meter.write_process(idx, len(dataloader), epoch=-1, write_batch_idx=50)
+        query_img_pil = transforms.functional.to_pil_image(query_img[0])
+        dst.paste(source_img, (0, 0))
+        dst.paste(query_img_pil, (w, 0))
+        # save
+        save_visualize_path = join(save_visualize_path_prefix, f'{idx}.png')
+        dst.save(save_visualize_path)
 
-        if (idx+1) % 10 == 0:
-            avg_lat = tot_el / (idx + 1)*2
-            avg_fps = 1 / avg_lat
-            print(f'fps={avg_fps:.1f}')
-
-        # Visualize predictions
-        if Visualizer.visualize:
-            Visualizer.visualize_prediction_batch(batch['support_imgs'], batch['support_masks'],
-                                                  batch['query_img'], batch['query_mask'],
-                                                  pred_mask, batch['class_id'], idx,
-                                                  area_inter[1].float() / area_union[1].float())
 
     # Write evaluation results
     average_meter.write_result('Test', 0)

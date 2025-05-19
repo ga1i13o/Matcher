@@ -56,7 +56,8 @@ class SamAutomaticMaskGenerator:
         sel_multimask_output: bool = True,
         output_layer: int = -1,
         sel_output_layer: int = -1,
-        dense_pred: bool = True
+        dense_pred: bool = True,
+        is_sam2: bool=False
     ) -> None:
         """
         Using a SAM model, generates masks for the entire image.
@@ -127,8 +128,8 @@ class SamAutomaticMaskGenerator:
 
         if min_mask_region_area > 0:
             import cv2  # type: ignore # noqa: F401
-
-        self.predictor = SamPredictor(model)
+        self.is_sam2 = is_sam2
+        self.predictor = SamPredictor(model, is_sam2)
         self.points_per_batch = points_per_batch
         self.pred_iou_thresh = pred_iou_thresh
         self.stability_score_thresh = stability_score_thresh
