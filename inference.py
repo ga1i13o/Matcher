@@ -37,15 +37,16 @@ def test(matcher, dataloader, args=None):
 
         s = time()
         # 1. Matcher prepare references and target
-        matcher.set_reference(support_imgs, support_masks)
+        # matcher.set_reference(support_imgs, support_masks)
         matcher.set_target(query_img)
 
         # 2. Predict mask of target
-        pred_mask = matcher.predict()
+        class_index = batch['class_id'].item()
+        pred_mask = matcher.predict(class_index)
         matcher.clear()
         l = time() - s
         tot_l += l
-        if idx % 10 == 0 and idx > 0:
+        if idx % 100 == 0 and idx > 0:
             cur_avg_l = tot_l / (idx*2)
             cur_fps = 1 / cur_avg_l 
             print(f'[!!] runn. avg. FPS: {cur_fps:.2f} [!!]')
@@ -55,7 +56,7 @@ def test(matcher, dataloader, args=None):
         # 3. Evaluate prediction
         area_inter, area_union = Evaluator.classify_prediction(pred_mask.clone(), batch)
         average_meter.update(area_inter, area_union, batch['class_id'], loss=None)
-        average_meter.write_process(idx, len(dataloader), epoch=-1, write_batch_idx=1)
+        average_meter.write_process(idx, len(dataloader), epoch=-1, write_batch_idx=200)
 
         # Visualize predictions
     # Write evaluation results
@@ -141,10 +142,14 @@ if __name__ == '__main__':
 
     # Dataset initialization
     FSSDataset.initialize(img_size=args.img_size, datapath=args.datapath, use_original_imgsize=args.use_original_imgsize)
-    dataloader_test = FSSDataset.build_dataloader(args.benchmark, args.bsz, args.nworker, args.fold, 'test', args.nshot)
+    dataloader_test, dataset = FSSDataset.build_dataloader(args.benchmark, args.bsz, args.nworker, args.fold, 'test', args.nshot)
+    dataset.sample_annotated_refs()
 
-    # Test Matcher
+    s_time = time()
     with torch.no_grad():
+        matcher.set_references_fix(dataset)
         test_miou, test_fb_iou = test(matcher, dataloader_test, args=args)
+    tot_time = time() - s_time
     Logger.info('Fold %d mIoU: %5.2f \t FB-IoU: %5.2f' % (args.fold, test_miou.item(), test_fb_iou.item()))
     Logger.info('==================== Finished Testing ====================')
+    Logger.info(f'Total time: {tot_time/60:.1f} minutes to annotate {len(dataset)} images')

@@ -78,8 +78,47 @@ class Matcher:
 
         self.device = device
 
-    def set_reference(self, imgs, masks):
+    def set_references_fix(self, dataset):
+        self.class_references, self.feat_refs = {}, {}
+        def reference_masks_verification(masks):
+            if masks.sum() == 0:
+                _, _, sh, sw = masks.shape
+                masks[..., (sh // 2 - 7):(sh // 2 + 7), (sw // 2 - 7):(sw // 2 + 7)] = 1
+            return masks
 
+        for ci in dataset.class_ids:
+            query_name, support_img, support_mask = dataset.sampled_refs[ci]
+            # imgs = support_img.flatten(0, 1)  # bs, 3, h, w
+            imgs = support_img[None]
+            # process reference masks
+            img_size = imgs.shape[-1]
+            assert img_size == self.input_size[-1]
+            feat_size = img_size // self.encoder.patch_size
+
+            self.encoder_img_size = img_size
+            self.encoder_feat_size = feat_size
+
+            # process reference masks
+            masks = reference_masks_verification(support_mask)
+            masks = masks.permute(1, 0, 2, 3)  # ns, 1, h, w
+            ref_masks_pool = F.avg_pool2d(masks, (self.encoder.patch_size, self.encoder.patch_size))
+            nshot = ref_masks_pool.shape[0]
+            ref_masks_pool = (ref_masks_pool > self.generator.predictor.model.mask_threshold).float()
+            ref_masks_pool = ref_masks_pool.reshape(-1)  # nshot, N
+
+            # self.ref_imgs = imgs
+            # self.ref_masks_pool = ref_masks_pool
+            # self.nshot = nshot
+            self.class_references[ci] = (imgs, nshot, ref_masks_pool)
+
+        for ci in dataset.class_ids:
+            ref_imgs = torch.cat([self.encoder_transform(rimg)[None, ...] for rimg in self.class_references[ci][0]], dim=0)
+            ref_feats = self.encoder.forward_features(ref_imgs.to(self.device))["x_prenorm"][:, 1:]
+            ref_feats = ref_feats.reshape(-1, self.encoder.embed_dim)  # ns*N, c
+            ref_feats = F.normalize(ref_feats, dim=1, p=2) # normalize for cosine similarity
+            self.feat_refs[ci] = ref_feats
+
+    def set_reference(self, imgs, masks):
         def reference_masks_verification(masks):
             if masks.sum() == 0:
                 _, _, sh, sw = masks.shape
@@ -127,45 +166,46 @@ class Matcher:
                 max_iterations=self.max_sample_iterations
             )
 
+    def predict(self, class_index):
+        tar_feat = self.extract_img_feats()
+        ref_feats = self.feat_refs[class_index]
+        ref_masks_pool = self.class_references[class_index][2].cuda()
 
-    def predict(self):
-
-        ref_feats, tar_feat = self.extract_img_feats()
-        all_points, box, S, C, reduced_points_num = self.patch_level_matching(ref_feats=ref_feats, tar_feat=tar_feat)
+        all_points, box, S, C, reduced_points_num = self.patch_level_matching(ref_feats=ref_feats, tar_feat=tar_feat, ref_masks_pool=ref_masks_pool)
         points = self.clustering(all_points) if not self.use_points_or_centers else all_points
         self.set_rps()
-        pred_masks = self.mask_generation(self.tar_img_np, points, box, all_points, self.ref_masks_pool, C)
+        pred_masks = self.mask_generation(self.tar_img_np, points, box, all_points, ref_masks_pool, C)
         return pred_masks
 
 
     def extract_img_feats(self):
 
-        ref_imgs = torch.cat([self.encoder_transform(rimg)[None, ...] for rimg in self.ref_imgs], dim=0)
+        # ref_imgs = torch.cat([self.encoder_transform(rimg)[None, ...] for rimg in self.ref_imgs], dim=0)
         tar_img = torch.cat([self.encoder_transform(timg)[None, ...] for timg in self.tar_img], dim=0)
 
-        ref_feats = self.encoder.forward_features(ref_imgs.to(self.device))["x_prenorm"][:, 1:]
+        # ref_feats = self.encoder.forward_features(ref_imgs.to(self.device))["x_prenorm"][:, 1:]
         tar_feat = self.encoder.forward_features(tar_img.to(self.device))["x_prenorm"][:, 1:]
         # ns, N, c = ref_feats.shape
-        ref_feats = ref_feats.reshape(-1, self.encoder.embed_dim)  # ns*N, c
+        # ref_feats = ref_feats.reshape(-1, self.encoder.embed_dim)  # ns*N, c
         tar_feat = tar_feat.reshape(-1, self.encoder.embed_dim)  # N, c
 
-        ref_feats = F.normalize(ref_feats, dim=1, p=2) # normalize for cosine similarity
+        # ref_feats = F.normalize(ref_feats, dim=1, p=2) # normalize for cosine similarity
         tar_feat = F.normalize(tar_feat, dim=1, p=2)
 
-        return ref_feats, tar_feat
+        return tar_feat
 
-    def patch_level_matching(self, ref_feats, tar_feat):
+    def patch_level_matching(self, ref_feats, tar_feat, ref_masks_pool):
 
         # forward matching
         S = ref_feats @ tar_feat.t()  # ns*N, N
         C = (1 - S) / 2  # distance
 
-        S_forward = S[self.ref_masks_pool.flatten().bool()]
+        S_forward = S[ref_masks_pool.flatten().bool()]
 
         indices_forward = linear_sum_assignment(S_forward.cpu(), maximize=True)
         indices_forward = [torch.as_tensor(index, dtype=torch.int64, device=self.device) for index in indices_forward]
         sim_scores_f = S_forward[indices_forward[0], indices_forward[1]]
-        indices_mask = self.ref_masks_pool.flatten().nonzero()[:, 0]
+        indices_mask = ref_masks_pool.flatten().nonzero()[:, 0]
 
         # reverse matching
         S_reverse = S.t()[indices_forward[1]]
@@ -341,8 +381,8 @@ class Matcher:
         self.ref_masks_pool = None
         self.nshot = None
 
-        self.encoder_img_size = None
-        self.encoder_feat_size = None
+        # self.encoder_img_size = None
+        # self.encoder_feat_size = None
 
 
 
@@ -365,7 +405,7 @@ class RobustPromptSampler:
             # input: point: n*2, mask: h*w
             # output: n*1
             h, w = mask.shape
-            point = point.astype(np.int)
+            point = point.astype(int)
             point = point[:, ::-1]  # y,x
             point = np.clip(point, 0, [h - 1, w - 1])
             return mask[point[:, 0], point[:, 1]]
