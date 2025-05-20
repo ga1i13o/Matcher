@@ -365,7 +365,7 @@ class RobustPromptSampler:
             # input: point: n*2, mask: h*w
             # output: n*1
             h, w = mask.shape
-            point = point.astype(np.int)
+            point = point.astype(np.int32)
             point = point[:, ::-1]  # y,x
             point = np.clip(point, 0, [h - 1, w - 1])
             return mask[point[:, 0], point[:, 1]]

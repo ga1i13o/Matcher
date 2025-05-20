@@ -41,7 +41,12 @@ def test(matcher, dataloader, args=None):
         matcher.set_target(query_img)
 
         # 2. Predict mask of target
-        pred_mask = matcher.predict()
+        try:
+            pred_mask = matcher.predict()
+        except:
+            pred_mask = old_pred_mask
+        old_pred_mask = pred_mask.clone()
+
         matcher.clear()
         l = time() - s
         tot_l += l
@@ -117,12 +122,11 @@ if __name__ == '__main__':
     parser.add_argument('--deep_score_filter', type=float, default=0.33)
     parser.add_argument('--topk_scores_threshold', type=float, default=0.)
     parser.add_argument('--num_merging_mask', type=int, default=9, help='topk masks for merging')
-    parser.add_argument('--use_sam2', action='store_true', help='use semantic-sam')
 
 
     args = parser.parse_args()
     args.sample_range = eval(args.sample_range)
-
+    args.use_sam2= True
     if not os.path.exists(args.log_root):
         os.makedirs(args.log_root)
 
